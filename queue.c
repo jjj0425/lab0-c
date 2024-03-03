@@ -23,10 +23,8 @@ struct list_head *q_new()
 /* Free all storage used by queue */
 void q_free(struct list_head *head)
 {
-    if (!head || list_empty(head)) {
-        free(head);
+    if (!head)
         return;
-    }
 
     struct list_head *cur = NULL, *safe = NULL;
     list_for_each_safe (cur, safe, head)
