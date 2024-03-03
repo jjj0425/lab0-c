@@ -75,7 +75,7 @@ static inline element_t *q_remove(struct list_head *head,
 /* Remove an element from head of queue */
 element_t *q_remove_head(struct list_head *head, char *sp, size_t bufsize)
 {
-    if (__glibc_unlikely(head == NULL || list_empty(head)))
+    if (head == NULL || list_empty(head))
         return NULL;
 
     return q_remove(head, sp, bufsize, head->next);
@@ -84,7 +84,7 @@ element_t *q_remove_head(struct list_head *head, char *sp, size_t bufsize)
 /* Remove an element from tail of queue */
 element_t *q_remove_tail(struct list_head *head, char *sp, size_t bufsize)
 {
-    if (__glibc_unlikely(!head || list_empty(head)))
+    if (!head || list_empty(head))
         return NULL;
     return q_remove(head, sp, bufsize, head->prev);
 }
@@ -142,10 +142,25 @@ bool q_delete_dup(struct list_head *head)
     return true;
 }
 
+static inline void swap_pair(struct list_head **head)
+{
+    struct list_head *first = *head, *second = first->next;
+    first->next = second->next;
+    second->next = first;
+    second->prev = first->prev;
+    first->prev = second;
+    *head = second;
+}
+
 /* Swap every two adjacent nodes */
 void q_swap(struct list_head *head)
 {
     // https://leetcode.com/problems/swap-nodes-in-pairs/
+    if (!head)
+        return;
+    for (struct list_head **it = &head->next;
+         *it != head && (*it)->next != head; it = &(*it)->next->next)
+        swap_pair(it);
 }
 
 /* Reverse elements in queue */
@@ -179,15 +194,74 @@ void q_reverseK(struct list_head *head, int k)
     }
 }
 
+static int q_merge_two(struct list_head *first, struct list_head *second)
+{
+    if (!first || !second)
+        return 0;
+
+    int count = 0;
+    LIST_HEAD(tmp);
+    while (!list_empty(first) && !list_empty(second)) {
+        element_t *f = list_first_entry(first, element_t, list);
+        element_t *s = list_first_entry(second, element_t, list);
+        if (strcmp(f->value, s->value) <= 0)
+            list_move_tail(&f->list, &tmp);
+        else
+            list_move_tail(&s->list, &tmp);
+        count++;
+    }
+    count += q_size(first) + q_size(second);
+    list_splice(&tmp, first);
+    list_splice_tail_init(second, first);
+
+    return count;
+}
+
 /* Sort elements of queue in ascending/descending order */
-void q_sort(struct list_head *head, bool descend) {}
+void q_sort(struct list_head *head, bool descend)
+{
+    /* Try to use merge sort*/
+    if (!head || list_empty(head) || list_is_singular(head))
+        return;
+
+    /* Find middle point */
+    struct list_head *mid, *left, *right;
+    left = right = head;
+    do {
+        left = left->next;
+        right = right->prev;
+    } while (left != right && left->next != right);
+    mid = left;
+
+    /* Divide into two part */
+    LIST_HEAD(second);
+    list_cut_position(&second, mid, head->prev);
+
+    /* Conquer */
+    q_sort(head, descend);
+    q_sort(&second, descend);
+
+    /* Merge */
+    q_merge_two(head, &second);
+}
 
 /* Remove every node which has a node with a strictly less value anywhere to
  * the right side of it */
 int q_ascend(struct list_head *head)
 {
     // https://leetcode.com/problems/remove-nodes-from-linked-list/
-    return 0;
+    element_t *entry = NULL;
+    list_for_each_entry (entry, head, list) {
+        struct list_head *prev = entry->list.prev, *safe = prev->prev;
+        for (; prev != head; prev = safe, safe = safe->prev) {
+            element_t *prev_entry = list_entry(prev, element_t, list);
+            if (strcmp(prev_entry->value, entry->value) <= 0)
+                break;
+            list_del(prev);
+            q_release_element(prev_entry);
+        }
+    }
+    return q_size(head);
 }
 
 /* Remove every node which has a node with a strictly greater value anywhere to
@@ -195,7 +269,18 @@ int q_ascend(struct list_head *head)
 int q_descend(struct list_head *head)
 {
     // https://leetcode.com/problems/remove-nodes-from-linked-list/
-    return 0;
+    element_t *entry = NULL;
+    list_for_each_entry (entry, head, list) {
+        struct list_head *prev = entry->list.prev, *safe = prev->prev;
+        for (; prev != head; prev = safe, safe = safe->prev) {
+            element_t *prev_entry = list_entry(prev, element_t, list);
+            if (strcmp(prev_entry->value, entry->value) >= 0)
+                break;
+            list_del(prev);
+            q_release_element(prev_entry);
+        }
+    }
+    return q_size(head);
 }
 
 /* Merge all the queues into one sorted queue, which is in ascending/descending
@@ -203,6 +288,54 @@ int q_descend(struct list_head *head)
 int q_merge(struct list_head *head, bool descend)
 {
     // https://leetcode.com/problems/merge-k-sorted-lists/
+    if (!head || list_empty(head))
+        return 0;
 
-    return 0;
+    if (list_is_singular(head))
+        return list_first_entry(head, queue_contex_t, chain)->size;
+
+    /* Use 2-merge algorithm in https://arxiv.org/pdf/1801.04641.pdf */
+    LIST_HEAD(pending);
+    LIST_HEAD(empty);
+    int n = 0;
+    while (!list_empty(head)) {
+        list_move(head->next, &pending);
+        n++;
+
+        while (n > 3) {
+            queue_contex_t *x, *y, *z;
+            x = list_first_entry(&pending, queue_contex_t, chain);
+            y = list_first_entry(&x->chain, queue_contex_t, chain);
+            z = list_first_entry(&x->chain, queue_contex_t, chain);
+
+            if (y->size >= z->size << 1)
+                break;
+
+            if (x->size < z->size) {
+                y->size = q_merge_two(y->q, x->q);
+                list_move(&x->chain, &empty);
+                n--;
+            } else {
+                z->size = q_merge_two(z->q, y->q);
+                list_move(&y->chain, &empty);
+                n--;
+            }
+        }
+    }
+
+    /* Merge remaining list */
+    while (n > 1) {
+        queue_contex_t *x, *y;
+        x = list_first_entry(&pending, queue_contex_t, chain);
+        y = list_first_entry(&x->chain, queue_contex_t, chain);
+        y->size = q_merge_two(y->q, x->q);
+        list_move(&x->chain, &empty);
+        n--;
+    }
+
+    /* Move the last queue and empty queue to head */
+    list_splice(&empty, head);
+    list_splice(&pending, head);
+
+    return list_first_entry(head, queue_contex_t, chain)->size;
 }
