@@ -15,22 +15,15 @@
 struct list_head *q_new()
 {
     struct list_head *head = malloc(sizeof(struct list_head));
-    if (!head) {
-        free(head);
-        return NULL;
-    }
-
-    INIT_LIST_HEAD(head);
+    if (head)
+        INIT_LIST_HEAD(head);
     return head;
 }
 
 /* Free all storage used by queue */
 void q_free(struct list_head *head)
 {
-    if (__glibc_unlikely(!head))
-        return;
-
-    if (__glibc_unlikely(list_empty(head))) {
+    if (!head || list_empty(head)) {
         free(head);
         return;
     }
